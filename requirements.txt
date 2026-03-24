@@ -1,0 +1,12 @@
+streamlit
+pandas
+sqlalchemy
+matplotlib
+scipy
+healpy
+numpy
+shapely
+pymongo
+plotly
+astropy
+toml
