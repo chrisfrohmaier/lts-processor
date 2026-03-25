@@ -323,15 +323,32 @@ def process_app_state(app_state, submissions=None, lts_tfrac=0.5, dec_filter_abo
         # Apply threshold masking
         year_data = year_thresholds[year_key]
         threshold = year_data.get('threshold')
+        threshold_type = year_data.get('threshold_type', 'Absolute')
         invert_red = year_data.get('invert_red', False)
         
         if threshold is not None:
+            if threshold_type == "Percentage":
+                valid_vals = hpx_map[~np.isnan(hpx_map)]
+                total_counts = np.sum(valid_vals)
+                target_discard_sum = total_counts * (threshold / 100.0)
+                
+                sorted_vals = np.sort(valid_vals)
+                cumsum_vals = np.cumsum(sorted_vals)
+                
+                idx = np.searchsorted(cumsum_vals, target_discard_sum)
+                if idx >= len(sorted_vals):
+                    idx = len(sorted_vals) - 1
+                
+                absolute_threshold = sorted_vals[idx] if len(sorted_vals) > 0 else 0
+            else:
+                absolute_threshold = threshold
+                
             if invert_red == False:
                 # Valid pixels are > threshold. Mask out everything <= threshold.
-                mask = (hpx_map <= threshold)
+                mask = (hpx_map <= absolute_threshold)
             else:
                 # Valid pixels are <= threshold. Mask out everything > threshold.
-                mask = (hpx_map > threshold)
+                mask = (hpx_map > absolute_threshold)
                 
             hpx_map[mask] = np.nan
             

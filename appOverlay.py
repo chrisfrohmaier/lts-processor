@@ -326,11 +326,14 @@ if uploaded_file is not None:
                 st.session_state["date_widget"] = date.fromisoformat(loaded_state["start_date"])
                 
             st.session_state["loaded_thresholds"] = {}
+            st.session_state["loaded_threshold_types"] = {}
             yr_thresh = loaded_state.get("year_thresholds", {})
             for y in range(5):
                 yr_data = yr_thresh.get(f"year_{y+1}", {})
                 if "threshold" in yr_data and yr_data["threshold"] is not None:
                     st.session_state["loaded_thresholds"][y] = yr_data["threshold"]
+                if "threshold_type" in yr_data:
+                    st.session_state["loaded_threshold_types"][y] = yr_data["threshold_type"]
                 if "invert_red" in yr_data:
                     st.session_state[f"invert_yr_{y}"] = yr_data["invert_red"]
             st.session_state["apply_loaded_state"] = True
@@ -449,24 +452,66 @@ if df is not None and not df.empty:
             if min_val == max_val:
                 max_val = min_val + 1
                 
+            thresh_type_key = f"thresh_type_{year_index}"
+            
+            if st.session_state.get("apply_loaded_state", False):
+                loaded_type = st.session_state.get("loaded_threshold_types", {}).get(year_index)
+                if loaded_type is not None:
+                    st.session_state[thresh_type_key] = loaded_type
+            
+            if thresh_type_key not in st.session_state:
+                st.session_state[thresh_type_key] = "Absolute"
+                
+            col_t1, col_t2 = st.columns([1, 3])
+            with col_t1:
+                thresh_type = st.radio(
+                    f"Threshold Type (Y{year_index+1})", 
+                    ["Absolute", "Percentage"],
+                    key=thresh_type_key
+                )
+            
+            if thresh_type == "Absolute":
+                slider_min = min_val
+                slider_max = max_val
+                slider_label = f"Threshold for Red Overlay (Absolute, Y{year_index+1})"
+            else:
+                slider_min = 0
+                slider_max = 100
+                slider_label = f"Threshold for Red Overlay (% Discarded, Y{year_index+1})"
+                
             if f"slider_yr_{year_index}" not in st.session_state:
-                st.session_state[f"slider_yr_{year_index}"] = min_val
+                st.session_state[f"slider_yr_{year_index}"] = slider_min if thresh_type == "Absolute" else 0
 
             if st.session_state.get("apply_loaded_state", False):
                 loaded_thr = st.session_state.get("loaded_thresholds", {}).get(year_index)
                 if loaded_thr is not None:
-                    # Clamp the loaded threshold to strictly fit within the min/max bounds of the new data
-                    st.session_state[f"slider_yr_{year_index}"] = max(min_val, min(max_val, loaded_thr))
+                    st.session_state[f"slider_yr_{year_index}"] = max(slider_min, min(slider_max, loaded_thr))
                 
             current_val = st.session_state[f"slider_yr_{year_index}"]
-            current_val = max(min_val, min(max_val, current_val))
+            current_val = max(slider_min, min(slider_max, current_val))
             
-            threshold = st.slider(f"Threshold for Red Overlay (Year {year_index+1})", 
-                                  min_value=min_val, 
-                                  max_value=max_val, 
-                                  value=current_val,
-                                  step=1)
+            with col_t2:
+                threshold = st.slider(slider_label, 
+                                      min_value=slider_min, 
+                                      max_value=slider_max, 
+                                      value=current_val,
+                                      step=1)
             st.session_state[f"slider_yr_{year_index}"] = threshold
+            
+            if thresh_type == "Percentage":
+                total_counts = np.sum(valid_vals)
+                target_discard_sum = total_counts * (threshold / 100.0)
+                
+                sorted_vals = np.sort(valid_vals)
+                cumsum_vals = np.cumsum(sorted_vals)
+                
+                idx = np.searchsorted(cumsum_vals, target_discard_sum)
+                if idx >= len(sorted_vals):
+                    idx = len(sorted_vals) - 1
+                
+                absolute_threshold = sorted_vals[idx] if len(sorted_vals) > 0 else 0
+            else:
+                absolute_threshold = threshold
             
             invert_red = st.checkbox(f"Invert Red Overlay (Above Threshold) (Year {year_index+1})", 
                                      value=st.session_state.get(f"invert_yr_{year_index}", False))
@@ -487,9 +532,9 @@ if df is not None and not df.empty:
             
             # Highlight Mask (Red)
             if invert_red:
-                condition = (image_array > threshold) & (~np.isnan(image_array))
+                condition = (image_array > absolute_threshold) & (~np.isnan(image_array))
             else:
-                condition = (image_array <= threshold) & (~np.isnan(image_array))
+                condition = (image_array <= absolute_threshold) & (~np.isnan(image_array))
                 
             mask_array = np.where(condition, 1, np.nan)
             fig.add_trace(go.Heatmap(
@@ -546,9 +591,11 @@ if df is not None and not df.empty:
     # Track the UI values dynamically pulled via their session_state keys in the rendering loop
     for y in range(5):
         slider_val = st.session_state.get(f"slider_yr_{y}", None)
+        thresh_type_val = st.session_state.get(f"thresh_type_{y}", "Absolute")
         invert_val = st.session_state.get(f"invert_yr_{y}", False)
         app_state["year_thresholds"][f"year_{y+1}"] = {
             "threshold": slider_val,
+            "threshold_type": thresh_type_val,
             "invert_red": invert_val
         }
         
