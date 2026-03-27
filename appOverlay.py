@@ -18,7 +18,7 @@ from shapely.geometry import Polygon
 from pymongo import MongoClient
 
 st.set_page_config(layout="wide")
-st.title("LSST Survey Strategies + 4MOST Overlays")
+st.title("LTS Polygons + LSST Survey Strategies = LTS Plans")
 
 # -------------------------------------------------------------
 # exampleApp.py Helper Functions for Plotting Overlays
@@ -294,9 +294,13 @@ def render_lts_processor_page():
 # -------------------------------------------------------------
 # Navigation
 # -------------------------------------------------------------
-page = st.sidebar.radio("Navigation", ["Overlays", "LTS Processor"])
+page = st.sidebar.radio("Navigation", ["Draw Polygons", "Overlays", "LTS Processor"])
 
-if page == "LTS Processor":
+if page == "Draw Polygons":
+    import handdraw_Polygons
+    handdraw_Polygons.render_draw_polygons_page()
+    st.stop()
+elif page == "LTS Processor":
     render_lts_processor_page()
     st.stop()
 
