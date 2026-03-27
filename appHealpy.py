@@ -15,7 +15,7 @@ st.title("HEALPix Survey Strategies")
 
 # NSIDE determines the resolution of the HEALPix map
 nside_options = [16, 32, 64, 128, 256, 512]
-NSIDE = st.select_slider("Select Map Resolution (NSIDE)", options=nside_options, value=16)
+NSIDE = st.select_slider("Select Map Resolution (NSIDE)", options=nside_options, value=32)
 
 @st.cache_data
 def load_csv(csv_path):
@@ -191,4 +191,4 @@ if df is not None and not df.empty:
         fig['layout']['xaxis']['autorange'] = "reversed"
         fig.update_layout(yaxis_range=[-90,30])
 
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig)

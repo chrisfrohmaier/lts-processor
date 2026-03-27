@@ -516,7 +516,7 @@ def render_draw_polygons_page():
         st.session_state.last_nside = None
 
     # Always fetch the cached map so grid_map_nan is universally available down below
-    current_nside = st.session_state.get('draw_nside', 16)
+    current_nside = st.session_state.get('draw_nside', 32)
     grid_map_nan = get_grid_map(current_nside)
     zmin = 4
     zmax = np.nanmax(grid_map_nan)
@@ -609,7 +609,7 @@ def render_draw_polygons_page():
     R.A. pressure is smoothed over a rolling 30 degrees width.
     """)
     
-    st.select_slider("Select Map Resolution (NSIDE)", options=[8, 16, 32, 64, 128], value=16, key="draw_nside")
+    st.select_slider("Select Map Resolution (NSIDE)", options=[8, 16, 32, 64, 128], value=32, key="draw_nside")
 
     ncolors = 256
     cmap = matplotlib.colormaps['Spectral']
@@ -643,7 +643,7 @@ def render_draw_polygons_page():
         yaxis=dict(visible=False),
     )
 
-    st.plotly_chart(colorbar_fig, width='stretch')
+    st.plotly_chart(colorbar_fig)
 
     # Create an invisible scatter grid mapped to the heatmap's coordinates to seamlessly intercept clicks and restore hover info
     grid_lon = longitude[::2]
@@ -671,7 +671,7 @@ def render_draw_polygons_page():
 
     # display the five pre-created figures vertically
     for idx, f in enumerate((fig1, fig2, fig3, fig4, fig5)):
-        event = st.plotly_chart(f, width='stretch', on_select="rerun", selection_mode="points", key=f"sky_map_{idx}")
+        event = st.plotly_chart(f, on_select="rerun", selection_mode="points", key=f"sky_map_{idx}")
         if event and event.selection.get("points"):
             pt = event.selection["points"][0]
             new_pt = (pt.get("x"), pt.get("y"))
@@ -709,7 +709,7 @@ def render_draw_polygons_page():
     #         yaxis=dict(title="Fraction of 1-year time", range=[0, 1]),
     #         margin=dict(l=40, r=20, t=50, b=40),
     #     )
-    #     st.plotly_chart(fig_times, width='stretch')
+    #     st.plotly_chart(fig_times)
 
     st.divider()
     st.header("Step 3: Save to cloud")

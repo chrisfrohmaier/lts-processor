@@ -204,7 +204,6 @@ def render_lts_processor_page():
     st.subheader("Processor Arguments")
     col1, col2 = st.columns(2)
     with col1:
-        lts_tfrac = st.number_input("LTS tfrac", value=0.5, step=0.1)
         invert_Y1 = st.checkbox("Invert LSST Y1 onto Y2")
     with col2:
         dec_filter_above = st.number_input("Declination Filter Above (deg)", value=5.0, step=1.0)
@@ -225,7 +224,6 @@ def render_lts_processor_page():
             hpx_maps_by_year, res = process_app_state(
                 app_state=app_state,
                 submissions=submissions,
-                lts_tfrac=lts_tfrac,
                 dec_filter_above=dec_filter_above,
                 invert_lsst_Y1_onto_Y2=invert_Y1,
                 plot_proj=plot_proj,
@@ -294,13 +292,13 @@ def render_lts_processor_page():
 # -------------------------------------------------------------
 # Navigation
 # -------------------------------------------------------------
-page = st.sidebar.radio("Navigation", ["Draw Polygons", "Overlays", "LTS Processor"])
+page = st.sidebar.radio("Navigation", ["Draw Polygons on 4MOST", "Overlay on LSST", "Process LTS"])
 
-if page == "Draw Polygons":
+if page == "Draw Polygons on 4MOST":
     import handdraw_Polygons
     handdraw_Polygons.render_draw_polygons_page()
     st.stop()
-elif page == "LTS Processor":
+elif page == "Process LTS":
     render_lts_processor_page()
     st.stop()
 
@@ -365,7 +363,7 @@ if not latest_submissions:
 # print(latest_submissions)
 # NSIDE determines the resolution of the HEALPix map
 nside_options = [16, 32, 64, 128, 256, 512]
-NSIDE = st.select_slider("Select Map Resolution (NSIDE)", options=nside_options, value=16, key="nside_widget")
+NSIDE = st.select_slider("Select Map Resolution (NSIDE)", options=nside_options, value=32, key="nside_widget")
 
 @st.cache_data
 def load_csv(csv_path):
@@ -570,7 +568,7 @@ if df is not None and not df.empty:
                 margin=dict(l=40, r=40, t=50, b=40),
             )
 
-            st.plotly_chart(fig, width='stretch')
+            st.plotly_chart(fig)
 
     # Sequentially render each of the 5 years
     for y in range(5):
@@ -636,6 +634,6 @@ if df is not None and not df.empty:
         uirevision="diagnostic",
         margin=dict(l=40, r=40, t=50, b=40),
     )
-    st.plotly_chart(debug_fig, width='stretch')
+    st.plotly_chart(debug_fig)
         
 
