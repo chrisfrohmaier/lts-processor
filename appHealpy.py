@@ -191,4 +191,4 @@ if df is not None and not df.empty:
         fig['layout']['xaxis']['autorange'] = "reversed"
         fig.update_layout(yaxis_range=[-90,30])
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')

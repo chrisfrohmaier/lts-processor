@@ -570,7 +570,7 @@ if df is not None and not df.empty:
                 margin=dict(l=40, r=40, t=50, b=40),
             )
 
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
     # Sequentially render each of the 5 years
     for y in range(5):
@@ -636,6 +636,6 @@ if df is not None and not df.empty:
         uirevision="diagnostic",
         margin=dict(l=40, r=40, t=50, b=40),
     )
-    st.plotly_chart(debug_fig, use_container_width=True)
+    st.plotly_chart(debug_fig, width='stretch')
         
 

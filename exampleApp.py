@@ -645,11 +645,11 @@ colorbar_fig.update_layout(
     yaxis=dict(visible=False),
 )
 
-st.plotly_chart(colorbar_fig, use_container_width=True)
+st.plotly_chart(colorbar_fig, width='stretch')
 
 # display the five pre-created figures vertically
 for f in (fig1, fig2, fig3, fig4, fig5):
-    st.plotly_chart(f, use_container_width=True)
+    st.plotly_chart(f, width='stretch')
 
 # New: 1D line plot under the map that shares the longitude x-axis scale
 #import plotly.graph_objects as go as _go  # avoid name clash in context; use existing go normally
@@ -680,7 +680,7 @@ for f in (fig1, fig2, fig3, fig4, fig5):
 #         yaxis=dict(title="Fraction of 1-year time", range=[0, 1]),
 #         margin=dict(l=40, r=20, t=50, b=40),
 #     )
-#     st.plotly_chart(fig_times, use_container_width=True)
+#     st.plotly_chart(fig_times, width='stretch')
 
 st.divider()
 st.header("Step 3: Save to cloud")

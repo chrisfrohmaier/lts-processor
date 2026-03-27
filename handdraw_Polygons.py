@@ -643,7 +643,7 @@ def render_draw_polygons_page():
         yaxis=dict(visible=False),
     )
 
-    st.plotly_chart(colorbar_fig, use_container_width=True)
+    st.plotly_chart(colorbar_fig, width='stretch')
 
     # Create an invisible scatter grid mapped to the heatmap's coordinates to seamlessly intercept clicks and restore hover info
     grid_lon = longitude[::2]
@@ -671,7 +671,7 @@ def render_draw_polygons_page():
 
     # display the five pre-created figures vertically
     for idx, f in enumerate((fig1, fig2, fig3, fig4, fig5)):
-        event = st.plotly_chart(f, use_container_width=True, on_select="rerun", selection_mode="points", key=f"sky_map_{idx}")
+        event = st.plotly_chart(f, width='stretch', on_select="rerun", selection_mode="points", key=f"sky_map_{idx}")
         if event and event.selection.get("points"):
             pt = event.selection["points"][0]
             new_pt = (pt.get("x"), pt.get("y"))
@@ -709,7 +709,7 @@ def render_draw_polygons_page():
     #         yaxis=dict(title="Fraction of 1-year time", range=[0, 1]),
     #         margin=dict(l=40, r=20, t=50, b=40),
     #     )
-    #     st.plotly_chart(fig_times, use_container_width=True)
+    #     st.plotly_chart(fig_times, width='stretch')
 
     st.divider()
     st.header("Step 3: Save to cloud")
