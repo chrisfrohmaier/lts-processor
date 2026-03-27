@@ -362,7 +362,7 @@ if mongo_uri:
 if not latest_submissions:
     st.warning("No MongoDB submissions loaded or found.")
 
-print(latest_submissions)
+# print(latest_submissions)
 # NSIDE determines the resolution of the HEALPix map
 nside_options = [16, 32, 64, 128, 256, 512]
 NSIDE = st.select_slider("Select Map Resolution (NSIDE)", options=nside_options, value=16, key="nside_widget")

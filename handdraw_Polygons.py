@@ -97,7 +97,7 @@ def plotPolygons(data, survey_id, allColours=True):
                 target_fig = fig1
         except NameError:
             # if figs are not yet created, fallback to original fig
-            print("Figure objects not found; defaulting to 'fig'.")
+            # print("Figure objects not found; defaulting to 'fig'.")
             target_fig = globals().get('fig', None)
 
         # compute color from t_frac (default to 0 if missing)
@@ -216,96 +216,11 @@ def plotPolygons(data, survey_id, allColours=True):
                         )
         
         else:
-            print("Please enter a valid shape: 'stripe', 'point', or 'polygon' (or 'box').")
+            # print("Please enter a valid shape: 'stripe', 'point', or 'polygon' (or 'box').")
             continue
 
 
-def computeTimePressures(data):
-    """
-    Build a weight map (same shape as grid_map_nan) from the provided submission data.
-    Returns zeros map if data missing or malformed.
-    """
-    # guard against missing data
-    if not data or 'year1Areas' not in data or not isinstance(data['year1Areas'], list):
-        return np.zeros_like(grid_map_nan)
 
-    from matplotlib.path import Path
-
-    truthGrids = []
-    for i in data["year1Areas"]:
-        try:
-            if i.get('type') == 'stripe':
-                RA_lower = i['RA_lower']; RA_upper = i['RA_upper']
-                Dec_lower = i['Dec_lower']; Dec_upper = i['Dec_upper']
-                tfrac = float(i.get('t_frac', 0.0))
-                coords = rect_corners(RA_lower, RA_upper, Dec_lower, Dec_upper, closed=True)
-
-            elif i.get('type') == 'point':
-                ra_center = i['RA_center']
-                dec_center = i['Dec_center']
-                radius = 1.15
-                tfrac = float(i.get('t_frac', 0.0))
-                tissot = plotEllipseTissot(ra_center, dec_center, radius=radius)
-                coords = tissot
-
-            elif i.get('type') == 'polygon' or i.get('type') == 'box':
-                RA = list(i['RA'])
-                Dec = list(i['Dec'])
-                if len(RA) > 0 and (RA[0] != RA[-1] or Dec[0] != Dec[-1]):
-                    RA.append(RA[0])
-                    Dec.append(Dec[0])
-                tfrac = float(i.get('t_frac', 0.0))
-                coords = np.column_stack((RA, Dec))
-            else:
-                # skip unknown types
-                continue
-
-            # flatten mesh -> Nx2 array of (lon, lat)
-            allPoints = np.vstack(list(map(np.ravel, mesh))).T  # shape (N,2)
-
-            # Use matplotlib Path for point-in-polygon testing (robust & fast)
-            path = Path(coords)
-            inShape = path.contains_points(allPoints)
-            weightMapFlat = inShape.astype(float) * tfrac
-            weightMap = np.reshape(weightMapFlat, grid_map_nan.shape)
-            truthGrids.append(weightMap)
-        except Exception:
-            # on any area-specific error skip that area
-            continue
-
-    if not truthGrids:
-        return np.zeros_like(grid_map_nan)
-
-    truthGrid = np.maximum.reduce(truthGrids)
-    return truthGrid
-
-def moving_average_2d_wrap(arr, width):
-    # width must be odd so the window is centered
-    assert width % 2 == 1, "width must be odd"
-
-    k = width // 2
-    result = np.zeros_like(arr, dtype=float)
-
-    for dx in range(-k, k + 1):
-        for dy in range(-k, k + 1):
-            result += np.roll(np.roll(arr, dx, axis=0), dy, axis=0)
-
-    return result / (width * width)
-
-# new helper: 1D circular moving average (for longitude series)
-def moving_average_1d_wrap(arr, width):
-    """
-    Circular moving average over 1D array.
-    width must be odd. Returns array same shape as input.
-    """
-    arr = np.asarray(arr, dtype=float)
-    assert width % 2 == 1, "width must be odd"
-    k = width // 2
-    # use rolling sum via np.roll
-    result = np.zeros_like(arr, dtype=float)
-    for shift in range(-k, k+1):
-        result += np.roll(arr, shift)
-    return result / width
 
 
 import pandas as pd
@@ -449,7 +364,7 @@ def render_draw_polygons_page():
     try:
         latest_submissions_json = json.dumps(latest_submissions, indent=4, default=str)
     except Exception:
-        print("Error converting latest submissions to JSON")
+        # print("Error converting latest submissions to JSON")
         latest_submissions_json = "{}"
 
     # --- Added: prefer latest submission for survey S00 if present (non-empty), else use demo_data ---
@@ -611,12 +526,6 @@ def render_draw_polygons_page():
         st.session_state.cached_figs is None or
         st.session_state.last_nside != current_nside):
         
-        try:
-            truthGridCurrent = computeTimePressures(data)
-        except Exception as e:
-            st.error(f"Error computing time pressures: {e}")
-            truthGridCurrent = np.zeros_like(grid_map_nan)
-
         def colorbar(zmin, zmax, n = 6):
             return dict(
                 title = "Total Exposure Time<br>in pixel (minutes)",
@@ -678,20 +587,6 @@ def render_draw_polygons_page():
             st.info("No previous submissions found in the remote DB — only the current edited data will be plotted.")
 
         plotPolygons(data, data['survey'], allColours=True)
-
-        if latest_submissions:
-            latestTPress = []
-            for i in latest_submissions.keys():
-                if i == data.get('survey'):
-                    continue # Skip the active survey!
-                dataLatest = latest_submissions[i]['data']
-                latestTPress.append(computeTimePressures(dataLatest))
-            if latestTPress:
-                truthGridLatest = np.maximum.reduce(latestTPress)
-            else:
-                truthGridLatest = np.zeros_like(truthGridCurrent)
-        else:
-            truthGridLatest = np.zeros_like(truthGridCurrent)
 
         st.session_state.cached_figs = figs
         st.session_state.last_rendered_code = st.session_state.editor_code
