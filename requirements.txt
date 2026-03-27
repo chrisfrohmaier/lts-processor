@@ -10,3 +10,4 @@ pymongo
 plotly
 astropy
 toml
+streamlit-code-editor
