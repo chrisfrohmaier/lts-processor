@@ -888,7 +888,14 @@ def render_draw_polygons_page():
             if binsWant % 2 == 0:
                 binsWant += 1
                 
-            smoothTime = moving_average_1d_wrap(coarseTime, width=binsWant)
+            # Smooth both requested time and available time by 30 degrees first, then divide
+            smoothTimeY = moving_average_1d_wrap(timeY, width=binsWant)
+            smoothTimeMax1year = moving_average_1d_wrap(timeMax1year, width=binsWant)
+            
+            smoothTime = np.zeros_like(smoothTimeY)
+            valid_smooth = smoothTimeMax1year > 0
+            smoothTime[valid_smooth] = smoothTimeY[valid_smooth] / smoothTimeMax1year[valid_smooth]
+            
             plotSmooth = True
         except Exception as e:
             plotSmooth = False
