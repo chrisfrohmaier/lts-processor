@@ -153,10 +153,10 @@ def plotPolygons(data, survey_id, allColours=True):
                 name=f"{survey_id}<br> t_frac: {tfrac}"
             )
                         )
-        elif i['type']=='point':
+        elif i['type'] in ('point', 'circle'):
             ra_center = i['RA_center']
             dec_center = i['Dec_center']
-            radius = 1.15
+            radius = i.get('radius', 1.15)
             tfrac = i['t_frac']
             tissot = plotEllipseTissot(ra_center, dec_center, radius = radius)
 
@@ -248,6 +248,110 @@ def get_grid_map(nside):
     hp_map_rotated = hpx_map[new_pix]
     vec2pix_func = lambda x, y, z: hp.vec2pix(nside, x, y, z, nest=True)
     return proj.projmap(hp_map_rotated, vec2pix_func)
+
+# Cache the HEALPix map (before rotation/projection)
+@st.cache_data
+def get_hpx_map(nside):
+    qvp = load_qvp_data()
+    return cat2hpx(qvp['ra'], qvp['dec'], qvp['texp'], nside)
+
+def computeTimePressures(data, nside, target_year=None):
+    """
+    Build a weight map (1D HEALPix map of shape npix) from the provided submission data.
+    Only includes areas for target_year (if specified).
+    """
+    npix = hp.nside2npix(nside)
+    
+    # guard against missing data
+    if not data or 'year1Areas' not in data or not isinstance(data['year1Areas'], list):
+        return np.zeros(npix, dtype=float)
+
+    from matplotlib.path import Path
+
+    # Get HEALPix pixel centers
+    ra_hpx, dec_hpx = hp.pix2ang(nside, np.arange(npix), lonlat=True, nest=True)
+    allPoints = np.column_stack((ra_hpx, dec_hpx))
+
+    truthGrids = []
+    for i in data["year1Areas"]:
+        try:
+            # Check year filter
+            area_year = int(i.get('year', 1))
+            if target_year is not None and area_year != target_year:
+                continue
+
+            tfrac = float(i.get('t_frac', 0.0))
+            
+            if i.get('type') == 'stripe':
+                RA_lower = float(i['RA_lower'])
+                RA_upper = float(i['RA_upper'])
+                Dec_lower = float(i['Dec_lower'])
+                Dec_upper = float(i['Dec_upper'])
+                
+                # Check stripe inclusion directly in spherical coordinates
+                if RA_lower <= RA_upper:
+                    in_ra = (ra_hpx >= RA_lower) & (ra_hpx <= RA_upper)
+                else:
+                    in_ra = (ra_hpx >= RA_lower) | (ra_hpx <= RA_upper)
+                in_dec = (dec_hpx >= Dec_lower) & (dec_hpx <= Dec_upper)
+                inShape = in_ra & in_dec
+
+            elif i.get('type') in ('point', 'circle'):
+                ra_center = float(i['RA_center'])
+                dec_center = float(i['Dec_center'])
+                radius = float(i.get('radius', 1.15))
+                
+                # Calculate great-circle distance on the sphere
+                ra_center_rad = np.radians(ra_center)
+                dec_center_rad = np.radians(dec_center)
+                ra_hpx_rad = np.radians(ra_hpx)
+                dec_hpx_rad = np.radians(dec_hpx)
+                
+                cos_dist = (np.sin(dec_center_rad) * np.sin(dec_hpx_rad) + 
+                            np.cos(dec_center_rad) * np.cos(dec_hpx_rad) * np.cos(ra_hpx_rad - ra_center_rad))
+                cos_dist = np.clip(cos_dist, -1.0, 1.0)
+                ang_dist_deg = np.degrees(np.arccos(cos_dist))
+                inShape = ang_dist_deg <= radius
+
+            elif i.get('type') == 'polygon' or i.get('type') == 'box':
+                RA = i['RA']
+                Dec = i['Dec']
+                convex_hull = np.array(
+                    shapely.geometry.MultiPoint(
+                        [xy for xy in zip(RA, Dec)]
+                    ).convex_hull.exterior.coords
+                )
+                # Use matplotlib Path for point-in-polygon testing on the (RA, Dec) coordinates
+                path = Path(convex_hull)
+                inShape = path.contains_points(allPoints)
+            else:
+                # skip unknown types
+                continue
+
+            weightMap = inShape.astype(float) * tfrac
+            truthGrids.append(weightMap)
+        except Exception as e:
+            # on any area-specific error skip that area
+            continue
+
+    if not truthGrids:
+        return np.zeros(npix, dtype=float)
+
+    truthGrid = np.maximum.reduce(truthGrids)
+    return truthGrid
+
+def moving_average_1d_wrap(arr, width):
+    """
+    Circular moving average over 1D array.
+    width must be odd. Returns array same shape as input.
+    """
+    arr = np.asarray(arr, dtype=float)
+    assert width % 2 == 1, "width must be odd"
+    k = width // 2
+    result = np.zeros_like(arr, dtype=float)
+    for shift in range(-k, k+1):
+        result += np.roll(arr, shift)
+    return result / width
 
 f = open('demoArea.json')
 demo_io = f.read()
@@ -738,36 +842,88 @@ def render_draw_polygons_page():
                     st.session_state.drawing_points.append(new_pt)
                     st.rerun()
 
-    # New: 1D line plot under the map that shares the longitude x-axis scale
-    #import plotly.graph_objects as go as _go  # avoid name clash in context; use existing go normally
-    # if plotSmooth:
-    #     fig_times = go.Figure()
-    #     fig_times.add_trace(go.Scatter(
-    #         x=longitude,
-    #         y=coarseTime,
-    #         mode="lines",
-    #         name="Coarse Bins",
-    #         line=dict(color="#b1b1b1", width=2, dash='dash')
-    #     ))
-    #     fig_times.add_trace(go.Scatter(
-    #         x=longitude,
-    #         y=smoothTime,
-    #         mode="lines",
-    #         name="30° Smooth",
-    #         line=dict(color="#96cefd", width=5)
-    #     ))
-    #     fig_times.add_hline(y=0.5, line_width=2, line_dash="dash", line_color="#72e06a", annotation_text="50% Time Pressure", annotation_position="bottom left")
-    #     fig_times.add_hline(y=0.8, line_width=2, line_dash="dash", line_color="#d31510", annotation_text="80% Time Pressure", annotation_position="bottom left")
-    #     fig_times.update_layout(
-    #         autosize=False,
-    #         width=800,
-    #         height=260,
-    #         title="R.A. Time Pressure Plot",
-    #         xaxis=dict(title="R.A.", range=[360, 0]),  # reversed to match sky map RA direction
-    #         yaxis=dict(title="Fraction of 1-year time", range=[0, 1]),
-    #         margin=dict(l=40, r=20, t=50, b=40),
-    #     )
-    #     st.plotly_chart(fig_times)
+        Y = idx + 1
+        # Compute HEALPix time pressures for Year Y
+        try:
+            truthGridCurrent = computeTimePressures(data, nside=current_nside, target_year=Y)
+            latestTPress = []
+            if latest_submissions:
+                for s_id in latest_submissions.keys():
+                    if s_id == data.get('survey'):
+                        continue # Skip active survey being edited to avoid double counting
+                    dataLatest = latest_submissions[s_id]['data']
+                    latestTPress.append(computeTimePressures(dataLatest, current_nside, target_year=Y))
+            
+            if latestTPress:
+                truthGridLatest = np.maximum.reduce(latestTPress)
+                truthGridCombined = np.maximum(truthGridCurrent, truthGridLatest)
+            else:
+                truthGridCombined = truthGridCurrent
+                
+            hpx_map = get_hpx_map(current_nside)
+            hpx_map_clean = np.nan_to_num(hpx_map, nan=0.0)
+            npix = hp.nside2npix(current_nside)
+            ra_hpx, _ = hp.pix2ang(current_nside, np.arange(npix), lonlat=True, nest=True)
+            
+            # Align bins with longitude (reversing the resulting histogram to match 360 -> 0 longitude direction)
+            ra_bins = np.linspace(0, 360, len(longitude) + 1)
+            
+            hist5year, _ = np.histogram(ra_hpx, bins=ra_bins, weights=hpx_map_clean)
+            time5year = hist5year[::-1]
+            
+            # Scale to 1-year baseline limit (1/5 of 5-year total)
+            timeMax1year = time5year / 5.0
+            
+            scaledHpx = truthGridCombined * hpx_map_clean
+            histY, _ = np.histogram(ra_hpx, bins=ra_bins, weights=scaledHpx)
+            timeY = histY[::-1]
+            
+            coarseTime = np.zeros_like(timeY)
+            valid = timeMax1year > 0
+            coarseTime[valid] = timeY[valid] / timeMax1year[valid]
+            
+            # Circular moving average (rolling 30 degrees width)
+            widthWant = len(longitude) / 360.0
+            binsWant = int(30 // widthWant)
+            if binsWant % 2 == 0:
+                binsWant += 1
+                
+            smoothTime = moving_average_1d_wrap(coarseTime, width=binsWant)
+            plotSmooth = True
+        except Exception as e:
+            plotSmooth = False
+            
+        with st.expander(f"Year {Y} R.A. Time Pressure Plot"):
+            if plotSmooth:
+                fig_times = go.Figure()
+                fig_times.add_trace(go.Scatter(
+                    x=longitude,
+                    y=coarseTime,
+                    mode="lines",
+                    name="Coarse Bins",
+                    line=dict(color="#b1b1b1", width=2, dash='dash')
+                ))
+                fig_times.add_trace(go.Scatter(
+                    x=longitude,
+                    y=smoothTime,
+                    mode="lines",
+                    name="30° Smooth",
+                    line=dict(color="#96cefd", width=5)
+                ))
+                fig_times.add_hline(y=0.5, line_width=2, line_dash="dash", line_color="#72e06a", annotation_text="50% Time Pressure", annotation_position="bottom left")
+                fig_times.add_hline(y=0.8, line_width=2, line_dash="dash", line_color="#d31510", annotation_text="80% Time Pressure", annotation_position="bottom left")
+                fig_times.update_layout(
+                    autosize=False,
+                    width=800,
+                    height=260,
+                    title=f"Year {Y} R.A. Time Pressure Plot",
+                    xaxis=dict(title="R.A.", range=[360, 0]),  # reversed to match sky map RA direction
+                    yaxis=dict(title="Fraction of 1-year time", range=[0, 1.2]),
+                    margin=dict(l=40, r=20, t=50, b=40),
+                )
+                st.plotly_chart(fig_times, use_container_width=True)
+            else:
+                st.info("Could not render R.A. time pressure plot for this year.")
 
     st.divider()
     st.header("Step 3: Save to cloud")

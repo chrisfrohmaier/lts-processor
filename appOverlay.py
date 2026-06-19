@@ -107,10 +107,10 @@ def add_polygons_to_fig(fig, data, survey_id, target_year):
                                      line=dict(color=hexcol, width=inner_width), fillcolor=fillcol,
                                      hoverinfo="name", name=f"{survey_id}<br> t_frac: {tfrac}"))
             
-        elif i['type']=='point':
+        elif i['type'] in ('point', 'circle'):
             ra_center = i.get('RA_center', 0)
             dec_center = i.get('Dec_center', 0)
-            radius = 1.15
+            radius = i.get('radius', 1.15)
             tissot = plotEllipseTissot(ra_center, dec_center, radius=radius)
             
             fig.add_trace(go.Scatter(x=tissot[:, 0], y=tissot[:, 1], showlegend=False, mode="lines",
@@ -284,7 +284,7 @@ def render_lts_processor_page():
                 buf_lsst = io.BytesIO()
                 combined_lsst.write(buf_lsst, format='fits')
                 col_dl1.download_button(
-                    label="Download LSST Weights",
+                    label="Download LSST Weights FITS",
                     data=buf_lsst.getvalue(),
                     file_name=f"LSST_all_years_weights_{timestamp}.fits",
                     mime="application/fits"
@@ -296,10 +296,49 @@ def render_lts_processor_page():
                 buf_poly = io.BytesIO()
                 combined_poly.write(buf_poly, format='fits')
                 col_dl2.download_button(
-                    label="Download LTS Yearly Weights",
+                    label="Download LTS Yearly Weights FITS",
                     data=buf_poly.getvalue(),
                     file_name=f"User_defined_plan_{timestamp}.fits",
                     mime="application/fits"
+                )
+
+            # Add download buttons for the generated plots
+            st.markdown("### Download Generated Plots")
+            col_plt1, col_plt2, col_plt3 = st.columns(3)
+
+            def get_image_bytes(fig):
+                buf = io.BytesIO()
+                fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+                return buf.getvalue()
+
+            fig_lsst = figs.get("lsst")
+            if fig_lsst is not None:
+                img_lsst = get_image_bytes(fig_lsst)
+                col_plt1.download_button(
+                    label="Download LSST Plot (PNG)",
+                    data=img_lsst,
+                    file_name=f"LSST_year_maps_{timestamp}.png",
+                    mime="image/png"
+                )
+
+            fig_poly = figs.get("polygons")
+            if fig_poly is not None:
+                img_poly = get_image_bytes(fig_poly)
+                col_plt2.download_button(
+                    label="Download Yearly Plot (PNG)",
+                    data=img_poly,
+                    file_name=f"polygon_maps_{timestamp}.png",
+                    mime="image/png"
+                )
+
+            fig_diag = figs.get("diagnostic")
+            if fig_diag is not None:
+                img_diag = get_image_bytes(fig_diag)
+                col_plt3.download_button(
+                    label="Download Final Plot (PNG)",
+                    data=img_diag,
+                    file_name=f"yearly_maps_diagnostic_{timestamp}.png",
+                    mime="image/png"
                 )
 
 # -------------------------------------------------------------

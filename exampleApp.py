@@ -15,6 +15,7 @@ import datetime
 import os
 from pymongo import MongoClient
 from datetime import timezone
+import healpy as hp
 
 def plotEllipseTissot(ra, dec, radius=20):
     theta = np.deg2rad(dec)
@@ -153,10 +154,10 @@ def plotPolygons(data, survey_id, allColours=True):
                 name=f"{survey_id}<br> t_frac: {tfrac}"
             )
                         )
-        elif i['type']=='point':
+        elif i['type'] in ('point', 'circle'):
             ra_center = i['RA_center']
             dec_center = i['Dec_center']
-            radius = 1.15
+            radius = i.get('radius', 1.15)
             tfrac = i['t_frac']
             tissot = plotEllipseTissot(ra_center, dec_center, radius = radius)
 
@@ -224,62 +225,89 @@ def plotPolygons(data, survey_id, allColours=True):
 def computeTimePressures(data):
     """
     Build a weight map (same shape as grid_map_nan) from the provided submission data.
-    Returns zeros map if data missing or malformed.
+    Uses HEALPix to preserve spherical properties during polygon containment testing,
+    and projects the resulting map back to the 2D Cartesian grid.
     """
-    # guard against missing data
+    nside = 32
+    npix = hp.nside2npix(nside)
+    
+    # default grid
+    hpx_map = np.zeros(npix, dtype=float)
+    
     if not data or 'year1Areas' not in data or not isinstance(data['year1Areas'], list):
-        return np.zeros_like(grid_map_nan)
-
-    from matplotlib.path import Path
-
-    truthGrids = []
-    for i in data["year1Areas"]:
-        try:
-            if i.get('type') == 'stripe':
-                RA_lower = i['RA_lower']; RA_upper = i['RA_upper']
-                Dec_lower = i['Dec_lower']; Dec_upper = i['Dec_upper']
+        pass
+    else:
+        from matplotlib.path import Path
+        import shapely.geometry
+        
+        ra_hpx, dec_hpx = hp.pix2ang(nside, np.arange(npix), lonlat=True, nest=True)
+        allPoints = np.column_stack((ra_hpx, dec_hpx))
+        
+        truthGrids = []
+        for i in data["year1Areas"]:
+            try:
                 tfrac = float(i.get('t_frac', 0.0))
-                convex_hull = rect_corners(RA_lower, RA_upper, Dec_lower, Dec_upper, closed=True)
-
-            elif i.get('type') == 'point':
-                ra_center = i['RA_center']
-                dec_center = i['Dec_center']
-                radius = 1.15
-                tfrac = float(i.get('t_frac', 0.0))
-                tissot = plotEllipseTissot(ra_center, dec_center, radius=radius)
-                convex_hull = tissot
-
-            elif i.get('type') == 'polygon' or i.get('type') == 'box':
-                RA = i['RA']
-                Dec = i['Dec']
-                tfrac = float(i.get('t_frac', 0.0))
-                convex_hull = np.array(
-                    shapely.geometry.MultiPoint(
-                        [xy for xy in zip(RA, Dec)]
-                    ).convex_hull.exterior.coords
-                )
-            else:
-                # skip unknown types
+                
+                if i.get('type') == 'stripe':
+                    RA_lower = float(i['RA_lower'])
+                    RA_upper = float(i['RA_upper'])
+                    Dec_lower = float(i['Dec_lower'])
+                    Dec_upper = float(i['Dec_upper'])
+                    
+                    if RA_lower <= RA_upper:
+                        in_ra = (ra_hpx >= RA_lower) & (ra_hpx <= RA_upper)
+                    else:
+                        in_ra = (ra_hpx >= RA_lower) | (ra_hpx <= RA_upper)
+                    in_dec = (dec_hpx >= Dec_lower) & (dec_hpx <= Dec_upper)
+                    inShape = in_ra & in_dec
+                    
+                elif i.get('type') in ('point', 'circle'):
+                    ra_center = float(i['RA_center'])
+                    dec_center = float(i['Dec_center'])
+                    radius = float(i.get('radius', 1.15))
+                    
+                    ra_center_rad = np.radians(ra_center)
+                    dec_center_rad = np.radians(dec_center)
+                    ra_hpx_rad = np.radians(ra_hpx)
+                    dec_hpx_rad = np.radians(dec_hpx)
+                    
+                    cos_dist = (np.sin(dec_center_rad) * np.sin(dec_hpx_rad) + 
+                                np.cos(dec_center_rad) * np.cos(dec_hpx_rad) * np.cos(ra_hpx_rad - ra_center_rad))
+                    cos_dist = np.clip(cos_dist, -1.0, 1.0)
+                    ang_dist_deg = np.degrees(np.arccos(cos_dist))
+                    inShape = ang_dist_deg <= radius
+                    
+                elif i.get('type') == 'polygon' or i.get('type') == 'box':
+                    RA = i['RA']
+                    Dec = i['Dec']
+                    convex_hull = np.array(
+                        shapely.geometry.MultiPoint(
+                            [xy for xy in zip(RA, Dec)]
+                        ).convex_hull.exterior.coords
+                    )
+                    path = Path(convex_hull)
+                    inShape = path.contains_points(allPoints)
+                else:
+                    continue
+                
+                weightMap = inShape.astype(float) * tfrac
+                truthGrids.append(weightMap)
+            except Exception:
                 continue
-
-            # flatten mesh -> Nx2 array of (lon, lat)
-            allPoints = np.vstack(list(map(np.ravel, mesh))).T  # shape (N,2)
-
-            # Use matplotlib Path for point-in-polygon testing (robust & fast)
-            path = Path(convex_hull)
-            inShape = path.contains_points(allPoints)
-            weightMapFlat = inShape.astype(float) * tfrac
-            weightMap = np.reshape(weightMapFlat, grid_map_nan.shape)
-            truthGrids.append(weightMap)
-        except Exception:
-            # on any area-specific error skip that area
-            continue
-
-    if not truthGrids:
-        return np.zeros_like(grid_map_nan)
-
-    truthGrid = np.maximum.reduce(truthGrids)
-    return truthGrid
+                
+        if truthGrids:
+            hpx_map = np.maximum.reduce(truthGrids)
+            
+    # Project 1D HEALPix map to 2D CartesianProj (shape 210, 420)
+    proj = hp.projector.CartesianProj(xsize=int(420), ysize=int(210))
+    vec = hp.pix2vec(nside, np.arange(npix), nest=True)
+    r = hp.Rotator(rot=[180, 0, 0], deg=True)
+    vec_rot = r(vec)
+    new_pix = hp.vec2pix(nside, *vec_rot, nest=True)
+    
+    hp_map_rotated = hpx_map[new_pix]
+    vec2pix_func = lambda x, y, z: hp.vec2pix(nside, x, y, z, nest=True)
+    return proj.projmap(hp_map_rotated, vec2pix_func)
 
 def moving_average_2d_wrap(arr, width):
     # width must be odd so the window is centered
