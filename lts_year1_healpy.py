@@ -108,16 +108,33 @@ hpCentres = np.array(list(map(lambda x: [x]+list(hp.pix2ang(NSIDE, x, lonlat=Tru
 allHpxPoint = list(map(Point, hpCentres[:,1], hpCentres[:,2]))
 
 hpx_map = np.zeros(npix, dtype=np.float64)
-hpx_map = hpx_map
+# Store list of region names for each pixel
+pixel_names = [[] for _ in range(npix)]
+
 for i in t_frac_argsort:
-    # print(ltsObjs[i].area_name)
     tfrac = convertUserWeightToLTSWeight(ltsObjs[i].t_frac)
     survey = ltsObjs[i].survey
     area_name = ltsObjs[i].area_name
-    # print(tfrac)
     ltsArea = ltsObjs[i].makeShapelyPolygon()
     tileInArea = np.array(list(map(ltsArea.contains, allHpxPoint)))
     hpx_map[tileInArea] = tfrac
+    
+    if area_name:
+        clean_name = str(area_name).strip()
+        while "  " in clean_name:
+            clean_name = clean_name.replace("  ", " ")
+        clean_name = clean_name.replace(" ", "_")
+        for px in np.where(tileInArea)[0]:
+            pixel_names[px].append(clean_name)
+
+# Format the names for each pixel
+formatted_names = []
+for names in pixel_names:
+    if len(names) == 0:
+        formatted_names.append("")
+    else:
+        unique_sorted = sorted(list(set(names)))
+        formatted_names.append("+".join(unique_sorted))
 
 healpixPD = pd.DataFrame(hpCentres, columns=['hpxIdx', 'ra', 'dec'])
 pixWeights = pd.DataFrame(
@@ -125,7 +142,10 @@ pixWeights = pd.DataFrame(
     columns=['hpxIdx', 'weight']
 )
 
+# Merge and create region_name column
 year1Weights = pd.merge(healpixPD, pixWeights)
+year1Weights['region_name'] = [formatted_names[int(idx)] for idx in year1Weights['hpxIdx']]
+
 year1Weights = year1Weights[(year1Weights['dec'] < 40) & (year1Weights['weight'] > 0)].copy()
 
 year1Weights['hpxIdx'] = year1Weights['hpxIdx'].astype(int)
@@ -137,7 +157,7 @@ year1Weights.rename(columns={'weight':'LTS_user_weight'}, inplace=True)
 
 ltsY1 = QTable.from_pandas(
     year1Weights[
-        ['field_id', 'ra', 'dec', 'JD', 'LTS_user_weight', 'weight_timescale']
+        ['field_id', 'ra', 'dec', 'JD', 'LTS_user_weight', 'weight_timescale', 'region_name']
     ]
 )
 
@@ -147,7 +167,8 @@ col_units = {
     'dec': 'deg',
     'JD': 'd',
     'LTS_user_weight': '',
-    'weight_timescale': 'd'
+    'weight_timescale': 'd',
+    'region_name': ''
 }
 
 for k, v in col_units.items():
@@ -164,17 +185,6 @@ ltsY1.meta = {
     
 }
 
-# ltsY1.description = {
-#     'Description':'This file contains the weights for the LTS year 1 fields.',
-#     'field_id':'The HEALPIX ID of the field',
-#     'ra':'The RA of the field in degrees',
-#     'dec':'The Dec of the field in degrees',
-#     'JD':'The Julian Date on which the weight will become active',
-#     'LTS_user_weight':'The LTS weight converted from the user weight. A weight of 1.0 corresponds to 20 per cent of the available time. Weights are capped at 0.9 to avoid division by zero or excessively large values.',
-#     'weight_timescale': 'The timescale (in days) over which the weight is '
-#                         'applied.'
-# }
-
 ltsY1['ra'].info.description = 'The RA of the field in degrees'
 ltsY1['dec'].info.description = 'The Dec of the field in degrees'
 ltsY1['JD'].info.description = 'The Julian Date on which the weight will become active'
@@ -185,5 +195,6 @@ ltsY1['LTS_user_weight'].info.description = (
 )
 ltsY1['weight_timescale'].info.description = 'The timescale (in days) over which the weight is applied.'
 ltsY1['field_id'].info.description = 'The HEALPIX ID of the field'
+ltsY1['region_name'].info.description = 'The name of the region(s) containing this HEALPix pixel'
 
 ltsY1.write('lts_year1_weights.fits', overwrite=True)

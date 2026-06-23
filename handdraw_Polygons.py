@@ -342,16 +342,101 @@ def computeTimePressures(data, nside, target_year=None):
 
 def moving_average_1d_wrap(arr, width):
     """
-    Circular moving average over 1D array.
+    Circular moving average over 1D array using a triangular window.
     width must be odd. Returns array same shape as input.
     """
     arr = np.asarray(arr, dtype=float)
     assert width % 2 == 1, "width must be odd"
     k = width // 2
+    
+    # Define triangular weights
+    weights = np.array([1.0 - abs(i) / (k + 1) for i in range(-k, k+1)])
+    weights /= np.sum(weights)  # Normalize weights
+    
     result = np.zeros_like(arr, dtype=float)
     for shift in range(-k, k+1):
-        result += np.roll(arr, shift)
-    return result / width
+        result += np.roll(arr, shift) * weights[shift + k]
+    return result
+
+def calculate_ra_bucket_avail_time(n_bins=48, night_hours=9.0):
+    """
+    Calculate total physical available observing hours per R.A. bucket over a year.
+    Partitions the total 1-year telescope observing time (3285 hours) across R.A. buckets.
+    """
+    # Night duration in degrees
+    night_width = night_hours * 15.0
+    half_night = night_width / 2.0
+    
+    # Bin boundaries
+    bin_edges = np.linspace(0, 360, n_bins + 1)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+    bin_width = 360.0 / n_bins
+    
+    # Integrate over 365 days
+    days = np.arange(1, 366)
+    # Sun's RA: approx. 0 at March 20 (day 80)
+    sun_ra = (days - 80) * 360.0 / 365.25 % 360.0
+    # LST mid-night is opposite the Sun
+    lst_mid = (sun_ra + 180.0) % 360.0
+    
+    avail_hours = np.zeros(n_bins)
+    
+    # Sample LST offsets during the 9-hour night (in 1-degree steps)
+    # Each step is 1 degree of Earth's rotation = 1/15 hours.
+    # To avoid double-counting and partition the single-telescope time budget,
+    # each LST hour is allocated to the R.A. bin that is on the meridian.
+    lst_offsets = np.linspace(-half_night, half_night, int(night_width) + 1)
+    
+    for day_idx in range(365):
+        mid = lst_mid[day_idx]
+        lst_points = (lst_offsets + mid) % 360.0
+        
+        for lst in lst_points:
+            diff = np.abs(bin_centers - lst)
+            diff = np.minimum(diff, 360.0 - diff)
+            # Allocate this LST point to the closest bin center (on the meridian)
+            observable = diff <= (bin_width / 2.0)
+            avail_hours[observable] += (1.0 / 15.0)
+            
+    return bin_centers, avail_hours
+
+def calculate_ra_bucket_requested_time(data, latest_submissions, current_nside, target_year, n_bins=24):
+    """
+    Sum the requested Year Y exposure time (in hours) of visible pixels per R.A. bucket.
+    """
+    truthGridCurrent = computeTimePressures(data, nside=current_nside, target_year=target_year)
+    latestTPress = []
+    if latest_submissions:
+        for s_id in latest_submissions.keys():
+            if s_id == data.get('survey'):
+                continue
+            dataLatest = latest_submissions[s_id]['data']
+            latestTPress.append(computeTimePressures(dataLatest, current_nside, target_year=target_year))
+            
+    if latestTPress:
+        truthGridLatest = np.maximum.reduce(latestTPress)
+        truthGridCombined = np.maximum(truthGridCurrent, truthGridLatest)
+    else:
+        truthGridCombined = truthGridCurrent
+
+    hpx_map = get_hpx_map(current_nside)
+    hpx_map_clean = np.nan_to_num(hpx_map, nan=0.0)
+    
+    npix = hp.nside2npix(current_nside)
+    ra_hpx, dec_hpx = hp.pix2ang(current_nside, np.arange(npix), lonlat=True, nest=True)
+    
+    # Declination visibility check (altitude >= 30 deg at Paranal latitude -24.6)
+    alt_max = 90.0 - np.abs(-24.6 - dec_hpx)
+    observable_mask = alt_max >= 30.0
+    
+    # Scale exposure times (in minutes) and convert to hours
+    scaled_time_hours = (truthGridCombined * hpx_map_clean) / 60.0
+    scaled_time_hours[~observable_mask] = 0.0
+    
+    bin_edges = np.linspace(0, 360, n_bins + 1)
+    hist_req, _ = np.histogram(ra_hpx, bins=bin_edges, weights=scaled_time_hours)
+    
+    return hist_req
 
 f = open('demoArea.json')
 demo_io = f.read()
@@ -703,6 +788,7 @@ def render_draw_polygons_page():
             height=600,
             title='Year 1 Long Term Scheduler Preference: SELFIE 453',
             clickmode='event+select',
+            margin=dict(l=60, r=120, t=60, b=50),
             xaxis=dict(
                 title='R.A.',
 
@@ -833,7 +919,7 @@ def render_draw_polygons_page():
 
     # display the five pre-created figures vertically
     for idx, f in enumerate((fig1, fig2, fig3, fig4, fig5)):
-        event = st.plotly_chart(f, on_select="rerun", selection_mode="points", key=f"sky_map_{idx}")
+        event = st.plotly_chart(f, on_select="rerun", selection_mode="points", key=f"sky_map_{idx}", use_container_width=True)
         if event and event.selection.get("points"):
             pt = event.selection["points"][0]
             new_pt = (pt.get("x"), pt.get("y"))
@@ -843,94 +929,108 @@ def render_draw_polygons_page():
                     st.rerun()
 
         Y = idx + 1
-        # Compute HEALPix time pressures for Year Y
+        # Compute physical R.A. available and requested times for Year Y
         try:
-            truthGridCurrent = computeTimePressures(data, nside=current_nside, target_year=Y)
-            latestTPress = []
-            if latest_submissions:
-                for s_id in latest_submissions.keys():
-                    if s_id == data.get('survey'):
-                        continue # Skip active survey being edited to avoid double counting
-                    dataLatest = latest_submissions[s_id]['data']
-                    latestTPress.append(computeTimePressures(dataLatest, current_nside, target_year=Y))
-            
-            if latestTPress:
-                truthGridLatest = np.maximum.reduce(latestTPress)
-                truthGridCombined = np.maximum(truthGridCurrent, truthGridLatest)
-            else:
-                truthGridCombined = truthGridCurrent
-                
-            hpx_map = get_hpx_map(current_nside)
-            hpx_map_clean = np.nan_to_num(hpx_map, nan=0.0)
-            npix = hp.nside2npix(current_nside)
-            ra_hpx, _ = hp.pix2ang(current_nside, np.arange(npix), lonlat=True, nest=True)
-            
-            # Align bins with longitude (reversing the resulting histogram to match 360 -> 0 longitude direction)
-            ra_bins = np.linspace(0, 360, len(longitude) + 1)
-            
-            hist5year, _ = np.histogram(ra_hpx, bins=ra_bins, weights=hpx_map_clean)
-            time5year = hist5year[::-1]
-            
-            # Scale to 1-year baseline limit (1/5 of 5-year total)
-            timeMax1year = time5year / 5.0
-            
-            scaledHpx = truthGridCombined * hpx_map_clean
-            histY, _ = np.histogram(ra_hpx, bins=ra_bins, weights=scaledHpx)
-            timeY = histY[::-1]
-            
-            coarseTime = np.zeros_like(timeY)
-            valid = timeMax1year > 0
-            coarseTime[valid] = timeY[valid] / timeMax1year[valid]
-            
-            # Circular moving average (rolling 30 degrees width)
-            widthWant = len(longitude) / 360.0
-            binsWant = int(30 // widthWant)
-            if binsWant % 2 == 0:
-                binsWant += 1
-                
-            # Smooth both requested time and available time by 30 degrees first, then divide
-            smoothTimeY = moving_average_1d_wrap(timeY, width=binsWant)
-            smoothTimeMax1year = moving_average_1d_wrap(timeMax1year, width=binsWant)
-            
-            smoothTime = np.zeros_like(smoothTimeY)
-            valid_smooth = smoothTimeMax1year > 0
-            smoothTime[valid_smooth] = smoothTimeY[valid_smooth] / smoothTimeMax1year[valid_smooth]
-            
-            plotSmooth = True
+            # We use 24 R.A. buckets (15 degrees each, corresponding to 24 hours of R.A.)
+            n_bins = 192
+            bin_centers, time_avail = calculate_ra_bucket_avail_time(n_bins=n_bins)
+            time_req = calculate_ra_bucket_requested_time(
+                data=data,
+                latest_submissions=latest_submissions,
+                current_nside=current_nside,
+                target_year=Y,
+                n_bins=n_bins
+            )
+            plotBottleneck = True
         except Exception as e:
-            plotSmooth = False
+            plotBottleneck = False
             
-        with st.expander(f"Year {Y} R.A. Time Pressure Plot"):
-            if plotSmooth:
+        with st.expander(f"Year {Y} R.A. Observing Time and Bottlenecks"):
+            if plotBottleneck:
+                # Calculate 60-degree smoothed requested and available times
+                # (60 degrees total window representing the +/-30 degree hour angle visibility range)
+                bin_width = 360.0 / n_bins
+                smooth_width_bins = int(round(60.0 / bin_width))
+                if smooth_width_bins % 2 == 0:
+                    smooth_width_bins += 1
+                smooth_width_bins = max(1, min(smooth_width_bins, n_bins))
+                if smooth_width_bins % 2 == 0:
+                    smooth_width_bins = max(1, smooth_width_bins - 1)
+                
+                smooth_time_req = moving_average_1d_wrap(time_req, width=smooth_width_bins)
+                smooth_time_avail = moving_average_1d_wrap(time_avail, width=smooth_width_bins)
+
+                # Calculate fractions (safety checked for divide by zero)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    raw_fraction = np.where(smooth_time_avail > 0, time_req / smooth_time_avail, 0.0)
+                    smooth_fraction = np.where(smooth_time_avail > 0, smooth_time_req / smooth_time_avail, 0.0)
+
                 fig_times = go.Figure()
-                fig_times.add_trace(go.Scatter(
-                    x=longitude,
-                    y=coarseTime,
-                    mode="lines",
-                    name="Coarse Bins",
-                    line=dict(color="#b1b1b1", width=2, dash='dash')
+                
+                # Add requested time as gray bars (scaled to percentage)
+                fig_times.add_trace(go.Bar(
+                    x=bin_centers,
+                    y=raw_fraction,
+                    name="Raw Requested Time (Hours)",
+                    marker_color="#bdbdbd",
+                    customdata=time_req,
+                    hovertemplate="<b>RA Bin</b>: %{x:.1f}°<br><b>Requested</b>: %{customdata:.1f} Hours<br><b>% of Available Telescope Time</b>: %{y:.1%}<extra></extra>"
                 ))
+                
+                # Add 60-degree smoothed requested time as a light blue line (scaled to percentage)
                 fig_times.add_trace(go.Scatter(
-                    x=longitude,
-                    y=smoothTime,
+                    x=bin_centers,
+                    y=smooth_fraction,
                     mode="lines",
-                    name="30° Smooth",
-                    line=dict(color="#96cefd", width=5)
+                    name="Requested Time (±30° Smooth)",
+                    line=dict(color="#96cefd", width=3),
+                    customdata=smooth_time_req,
+                    hovertemplate="<b>RA Bin</b>: %{x:.1f}°<br><b>Smoothed Demand</b>: %{customdata:.1f} Hours<br><b>% of Available Telescope Time</b>: %{y:.1%}<extra></extra>"
                 ))
-                fig_times.add_hline(y=0.5, line_width=2, line_dash="dash", line_color="#72e06a", annotation_text="50% Time Pressure", annotation_position="bottom left")
-                fig_times.add_hline(y=0.8, line_width=2, line_dash="dash", line_color="#d31510", annotation_text="80% Time Pressure", annotation_position="bottom left")
+                
+                # Add 60-degree smoothed available time as a red dashed line (at 100%)
+                fig_times.add_trace(go.Scatter(
+                    x=bin_centers,
+                    y=np.ones_like(bin_centers),
+                    mode="lines",
+                    name="Available Telescope Time (±30° Smooth)",
+                    line=dict(color="#d31510", width=3, dash='dash'),
+                    customdata=smooth_time_avail,
+                    hovertemplate="<b>RA Bin</b>: %{x:.1f}°<br><b>Smoothed Capacity</b>: %{customdata:.1f} Hours<br><b>% of Available Telescope Time</b>: 100.0%<extra></extra>"
+                ))
+
+                # Add LTS limit (50% of available telescope time) as a green dashed line (at 50%)
+                fig_times.add_trace(go.Scatter(
+                    x=bin_centers,
+                    y=0.5 * np.ones_like(bin_centers),
+                    name="LTS limit",
+                    line=dict(color="#2ca02c", width=2, dash='dash'),
+                    customdata=0.5 * smooth_time_avail,
+                    hovertemplate="<b>RA Bin</b>: %{x:.1f}°<br><b>LTS Limit</b>: %{customdata:.1f} Hours<br><b>% of Available Telescope Time</b>: 50.0%<extra></extra>"
+                ))
+                
                 fig_times.update_layout(
                     autosize=False,
                     width=800,
-                    height=260,
-                    title=f"Year {Y} R.A. Time Pressure Plot",
-                    xaxis=dict(title="R.A.", range=[360, 0]),  # reversed to match sky map RA direction
-                    yaxis=dict(title="Fraction of 1-year time", range=[0, 1.2]),
-                    margin=dict(l=40, r=20, t=50, b=40),
+                    height=300,
+                    title=f"Year {Y} R.A. Observing Time Request vs. Available Limit",
+                    xaxis=dict(
+                        title="Right Ascension (Degrees)",
+                        range=[360, 0],  # reversed to match sky map RA direction
+                        tickmode='array',
+                        tickvals=np.arange(0, 361, 30)
+                    ),
+                    yaxis=dict(
+                        title="% of Available Telescope Time",
+                        tickformat=".0%",
+                        rangemode="tozero"
+                    ),
+                    margin=dict(l=60, r=120, t=60, b=50),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                 )
                 st.plotly_chart(fig_times, use_container_width=True)
             else:
-                st.info("Could not render R.A. time pressure plot for this year.")
+                st.info("Could not render R.A. observing time bottleneck plot for this year.")
 
     st.divider()
     st.header("Step 3: Save to cloud")
