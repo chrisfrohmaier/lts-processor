@@ -12,7 +12,7 @@ import time
 from astropy.table import QTable
 from astropy import units as u
 
-def lsst_map_to_LTS_format(lsst_map, nside, year_start_mjd, base_mjd):
+def lsst_map_to_LTS_format(lsst_map, nside, year_start_mjd, base_mjd, region_names=None):
     """Convert LSST maps to LTS format."""
     valid_mask = ~np.isnan(lsst_map)
     field_id = np.where(valid_mask)[0]
@@ -24,13 +24,19 @@ def lsst_map_to_LTS_format(lsst_map, nside, year_start_mjd, base_mjd):
     LTS_user_weight = lsst_map[valid_mask]
     weight_timescale = np.full(len(field_id), 365.0)
     
+    if region_names is not None:
+        region_name_col = [region_names[idx] for idx in field_id]
+    else:
+        region_name_col = np.full(len(field_id), 'LSST', dtype=object)
+        
     df = pd.DataFrame({
         'field_id': field_id,
         'ra': ra,
         'dec': dec,
         'JD': jd,
         'LTS_user_weight': LTS_user_weight,
-        'weight_timescale': weight_timescale
+        'weight_timescale': weight_timescale,
+        'region_name': region_name_col
     })
     
     lsst = QTable.from_pandas(df)
@@ -41,7 +47,8 @@ def lsst_map_to_LTS_format(lsst_map, nside, year_start_mjd, base_mjd):
         'dec': 'deg',
         'JD': 'd',
         'LTS_user_weight': '',
-        'weight_timescale': 'd'
+        'weight_timescale': 'd',
+        'region_name': ''
     }
 
     for k, v in col_units.items():
@@ -64,6 +71,7 @@ def lsst_map_to_LTS_format(lsst_map, nside, year_start_mjd, base_mjd):
     )
     lsst['weight_timescale'].info.description = 'The timescale (in days) over which the weight is applied.'
     lsst['field_id'].info.description = 'The HEALPIX ID of the field'
+    lsst['region_name'].info.description = 'The name of the region(s) containing this HEALPix pixel'
 
     return lsst
 
@@ -184,6 +192,9 @@ def create_polygon_map(nside, target_year, submissions):
     # Start with NaNs, meaning no coverage inside this polygon map (distinguishes from t_frac=0.0)
     poly_map = np.full(npix, np.nan, dtype=np.float64)
     
+    # Store list of names for each pixel
+    pixel_names = [[] for _ in range(npix)]
+    
     # Pre-calculate all HEALPix centers for planar point-in-polygon tests
     # Getting RA/Dec for all pixels is very fast
     ra_all, dec_all = hp.pix2ang(nside, np.arange(npix), nest=True, lonlat=True)
@@ -220,8 +231,27 @@ def create_polygon_map(nside, target_year, submissions):
         # Assign t_frac to those pixels
         if len(pixels) > 0:
             poly_map[pixels] = t_frac
+            
+            # Clean region name
+            name = area.get('name')
+            if name:
+                clean_name = str(name).strip()
+                while "  " in clean_name:
+                    clean_name = clean_name.replace("  ", " ")
+                clean_name = clean_name.replace(" ", "_")
+                for px in pixels:
+                    pixel_names[px].append(clean_name)
+                    
+    # Format region names for each pixel
+    formatted_names = []
+    for names in pixel_names:
+        if len(names) == 0:
+            formatted_names.append("")
+        else:
+            unique_sorted = sorted(list(set(names)))
+            formatted_names.append("+".join(unique_sorted))
                 
-    return poly_map
+    return poly_map, formatted_names
 
 def convertUserWeightToLTSWeight(userWeight):
     """
@@ -447,10 +477,11 @@ def process_app_state(app_state, submissions=None, lts_tfrac=0.5, dec_filter_abo
         
     # Pass 2: Apply polygon masks over the generated maps
     polygon_maps_by_year = {}
+    polygon_names_by_year = {}
     v_func = np.vectorize(convertUserWeightToLTSWeight, otypes=[float])
     for year_num, hpx_map in sorted(hpx_maps_by_year.items()):
         # Generate the polygon t_frac map for this year
-        poly_map = create_polygon_map(nside, year_num, submissions)
+        poly_map, region_names = create_polygon_map(nside, year_num, submissions)
         
         # Apply the user defined LTS scaling function
         in_poly_mask = ~np.isnan(poly_map)
@@ -458,6 +489,7 @@ def process_app_state(app_state, submissions=None, lts_tfrac=0.5, dec_filter_abo
             poly_map[in_poly_mask] = v_func(poly_map[in_poly_mask])
         
         polygon_maps_by_year[year_num] = poly_map
+        polygon_names_by_year[year_num] = region_names
         
         valid_pixels = np.count_nonzero(~np.isnan(hpx_map))
         mapped_poly_pixels = np.count_nonzero(in_poly_mask)
@@ -542,7 +574,8 @@ def process_app_state(app_state, submissions=None, lts_tfrac=0.5, dec_filter_abo
     if polygon_maps_by_year:
         for year, poly_map in sorted(polygon_maps_by_year.items()):
             year_start = start_mjd + (year - 1) * 365
-            poly_qtable = lsst_map_to_LTS_format(poly_map, nside, year_start, start_mjd)
+            region_names = polygon_names_by_year.get(year)
+            poly_qtable = lsst_map_to_LTS_format(poly_map, nside, year_start, start_mjd, region_names=region_names)
             if len(poly_qtable) > 0:
                 poly_qtable_list.append(poly_qtable)
 

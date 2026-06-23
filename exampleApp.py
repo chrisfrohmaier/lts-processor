@@ -16,6 +16,7 @@ import os
 from pymongo import MongoClient
 from datetime import timezone
 import healpy as hp
+import pandas as pd
 
 def plotEllipseTissot(ra, dec, radius=20):
     theta = np.deg2rad(dec)
@@ -222,17 +223,180 @@ def plotPolygons(data, survey_id, allColours=True):
             continue
 
 
-def computeTimePressures(data):
-    """
-    Build a weight map (same shape as grid_map_nan) from the provided submission data.
-    Uses HEALPix to preserve spherical properties during polygon containment testing,
-    and projects the resulting map back to the 2D Cartesian grid.
-    """
-    nside = 32
+@st.cache_data
+def load_qvp_data():
+    return pd.read_csv("./visit_plans/visits_SELFIE593.txt", sep=r'\s+', comment='#', 
+                       names=['id_tile', 'ra', 'dec', 'pos', 'isky', 'texp', 'texp_ob', 'tob_len', 'irank', 'ntile'])
+
+def cat2hpx(ra, dec, texp, nside):
     npix = hp.nside2npix(nside)
+    indices = hp.ang2pix(nside, ra, dec, lonlat=True, nest=True)
+    idx, counts = np.unique(indices, return_counts=True)
+    fhSum = np.bincount(indices, weights=texp)
+    hpx_map = np.zeros(npix, dtype=np.float64)
+    hpx_map[idx] = fhSum[fhSum>0]
+    hpx_map[hpx_map==0] = np.nan
+    return hpx_map
+
+@st.cache_data
+def get_hpx_map(nside):
+    qvp = load_qvp_data()
+    return cat2hpx(qvp['ra'], qvp['dec'], qvp['texp'], nside)
+
+def calculate_ra_bucket_avail_time(n_bins=24, night_hours=9.0):
+    """
+    Calculate total physical available observing hours per R.A. bucket over a year.
+    Partitions the total 1-year telescope observing time (3285 hours) across R.A. buckets.
+    """
+    # Night duration in degrees
+    night_width = night_hours * 15.0
+    half_night = night_width / 2.0
     
-    # default grid
+    # Bin boundaries
+    bin_edges = np.linspace(0, 360, n_bins + 1)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+    bin_width = 360.0 / n_bins
+    
+    # Integrate over 365 days
+    days = np.arange(1, 366)
+    # Sun's RA: approx. 0 at March 20 (day 80)
+    sun_ra = (days - 80) * 360.0 / 365.25 % 360.0
+    # LST mid-night is opposite the Sun
+    lst_mid = (sun_ra + 180.0) % 360.0
+    
+    avail_hours = np.zeros(n_bins)
+    
+    # Sample LST offsets during the 9-hour night (in 1-degree steps)
+    # Each step is 1 degree of Earth's rotation = 1/15 hours.
+    # To avoid double-counting and partition the single-telescope time budget,
+    # each LST hour is allocated to the R.A. bin that is on the meridian.
+    lst_offsets = np.linspace(-half_night, half_night, int(night_width) + 1)
+    
+    for day_idx in range(365):
+        mid = lst_mid[day_idx]
+        lst_points = (lst_offsets + mid) % 360.0
+        
+        for lst in lst_points:
+            diff = np.abs(bin_centers - lst)
+            diff = np.minimum(diff, 360.0 - diff)
+            # Allocate this LST point to the closest bin center (on the meridian)
+            observable = diff <= (bin_width / 2.0)
+            avail_hours[observable] += (1.0 / 15.0)
+            
+    return bin_centers, avail_hours
+
+def calculate_ra_bucket_requested_time(data, latest_submissions, current_nside, target_year, n_bins=24):
+    """
+    Sum the requested Year Y exposure time (in hours) of visible pixels per R.A. bucket.
+    """
+    truthGridCurrent = computeTimePressures(data, nside=current_nside, target_year=target_year)
+    latestTPress = []
+    if latest_submissions:
+        for s_id in latest_submissions.keys():
+            if s_id == data.get('survey'):
+                continue
+            dataLatest = latest_submissions[s_id]['data']
+            latestTPress.append(computeTimePressures(dataLatest, current_nside, target_year=target_year))
+            
+    if latestTPress:
+        truthGridLatest = np.maximum.reduce(latestTPress)
+        truthGridCombined = np.maximum(truthGridCurrent, truthGridLatest)
+    else:
+        truthGridCombined = truthGridCurrent
+
+    hpx_map = get_hpx_map(current_nside)
+    hpx_map_clean = np.nan_to_num(hpx_map, nan=0.0)
+    
+    npix = hp.nside2npix(current_nside)
+    ra_hpx, dec_hpx = hp.pix2ang(current_nside, np.arange(npix), lonlat=True, nest=True)
+    
+    # Declination visibility check (altitude >= 30 deg at Paranal latitude -24.6)
+    alt_max = 90.0 - np.abs(-24.6 - dec_hpx)
+    observable_mask = alt_max >= 30.0
+    
+    # Scale exposure times (in minutes) and convert to hours
+    scaled_time_hours = (truthGridCombined * hpx_map_clean) / 60.0
+    scaled_time_hours[~observable_mask] = 0.0
+    
+    bin_edges = np.linspace(0, 360, n_bins + 1)
+    hist_req, _ = np.histogram(ra_hpx, bins=bin_edges, weights=scaled_time_hours)
+    
+    return hist_req
+
+# Helper wrapper for compatibility
+def computeTimePressures_orig(data, nside=32, target_year=None):
+    npix = hp.nside2npix(nside)
     hpx_map = np.zeros(npix, dtype=float)
+    if not data or 'year1Areas' not in data or not isinstance(data['year1Areas'], list):
+        pass
+    else:
+        from matplotlib.path import Path
+        import shapely.geometry
+        ra_hpx, dec_hpx = hp.pix2ang(nside, np.arange(npix), lonlat=True, nest=True)
+        allPoints = np.column_stack((ra_hpx, dec_hpx))
+        truthGrids = []
+        for i in data["year1Areas"]:
+            try:
+                area_year = int(i.get('year', 1))
+                if target_year is not None and area_year != target_year:
+                    continue
+                tfrac = float(i.get('t_frac', 0.0))
+                if i.get('type') == 'stripe':
+                    RA_lower = float(i['RA_lower'])
+                    RA_upper = float(i['RA_upper'])
+                    Dec_lower = float(i['Dec_lower'])
+                    Dec_upper = float(i['Dec_upper'])
+                    if RA_lower <= RA_upper:
+                        in_ra = (ra_hpx >= RA_lower) & (ra_hpx <= RA_upper)
+                    else:
+                        in_ra = (ra_hpx >= RA_lower) | (ra_hpx <= RA_upper)
+                    in_dec = (dec_hpx >= Dec_lower) & (dec_hpx <= Dec_upper)
+                    inShape = in_ra & in_dec
+                elif i.get('type') in ('point', 'circle'):
+                    ra_center = float(i['RA_center'])
+                    dec_center = float(i['Dec_center'])
+                    radius = float(i.get('radius', 1.15))
+                    ra_center_rad = np.radians(ra_center)
+                    dec_center_rad = np.radians(dec_center)
+                    ra_hpx_rad = np.radians(ra_hpx)
+                    dec_hpx_rad = np.radians(dec_hpx)
+                    cos_dist = (np.sin(dec_center_rad) * np.sin(dec_hpx_rad) + 
+                                np.cos(dec_center_rad) * np.cos(dec_hpx_rad) * np.cos(ra_hpx_rad - ra_center_rad))
+                    cos_dist = np.clip(cos_dist, -1.0, 1.0)
+                    ang_dist_deg = np.degrees(np.arccos(cos_dist))
+                    inShape = ang_dist_deg <= radius
+                elif i.get('type') == 'polygon' or i.get('type') == 'box':
+                    RA = i['RA']
+                    Dec = i['Dec']
+                    convex_hull = np.array(
+                        shapely.geometry.MultiPoint(
+                            [xy for xy in zip(RA, Dec)]
+                        ).convex_hull.exterior.coords
+                    )
+                    path = Path(convex_hull)
+                    inShape = path.contains_points(allPoints)
+                else:
+                    continue
+                weightMap = inShape.astype(float) * tfrac
+                truthGrids.append(weightMap)
+            except Exception:
+                continue
+        if truthGrids:
+            hpx_map = np.maximum.reduce(truthGrids)
+    return hpx_map
+
+# For compatibility with legacy computeTimePressures signature in exampleApp.py
+def computeTimePressures(data, nside=32, target_year=None):
+    hpx_map = computeTimePressures_orig(data, nside=nside, target_year=target_year)
+    npix = hp.nside2npix(nside)
+    proj = hp.projector.CartesianProj(xsize=int(420), ysize=int(210))
+    vec = hp.pix2vec(nside, np.arange(npix), nest=True)
+    r = hp.Rotator(rot=[180, 0, 0], deg=True)
+    vec_rot = r(vec)
+    new_pix = hp.vec2pix(nside, *vec_rot, nest=True)
+    hp_map_rotated = hpx_map[new_pix]
+    vec2pix_func = lambda x, y, z: hp.vec2pix(nside, x, y, z, nest=True)
+    return proj.projmap(hp_map_rotated, vec2pix_func)
     
     if not data or 'year1Areas' not in data or not isinstance(data['year1Areas'], list):
         pass
@@ -325,17 +489,21 @@ def moving_average_2d_wrap(arr, width):
 # new helper: 1D circular moving average (for longitude series)
 def moving_average_1d_wrap(arr, width):
     """
-    Circular moving average over 1D array.
+    Circular moving average over 1D array using a triangular window.
     width must be odd. Returns array same shape as input.
     """
     arr = np.asarray(arr, dtype=float)
     assert width % 2 == 1, "width must be odd"
     k = width // 2
-    # use rolling sum via np.roll
+    
+    # Define triangular weights
+    weights = np.array([1.0 - abs(i) / (k + 1) for i in range(-k, k+1)])
+    weights /= np.sum(weights)  # Normalize weights
+    
     result = np.zeros_like(arr, dtype=float)
     for shift in range(-k, k+1):
-        result += np.roll(arr, shift)
-    return result / width
+        result += np.roll(arr, shift) * weights[shift + k]
+    return result
 
 
 f = open('demoArea.json')
