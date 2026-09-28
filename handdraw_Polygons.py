@@ -15,6 +15,7 @@ import datetime
 import os
 from pymongo import MongoClient
 from datetime import timezone
+from euclid_overlay import add_euclid_to_fig, get_euclid_if_enabled
 
 def plotEllipseTissot(ra, dec, radius=20):
     theta = np.deg2rad(dec)
@@ -910,8 +911,13 @@ def render_draw_polygons_page():
         name="click_grid"
     )
 
+    # Euclid DR1 footprint (visualisation only), toggled from the sidebar
+    euclid_data = get_euclid_if_enabled()
+
     for f in active_figs:
         f.add_trace(invisible_grid)
+        if euclid_data:
+            add_euclid_to_fig(f, euclid_data)
 
     # We purposefully DO NOT add the draw_trace directly to the figures because Streamlit 
     # would re-send the entire 3MB payload to the browser on every click, causing lag.

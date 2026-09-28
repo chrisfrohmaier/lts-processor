@@ -5,3 +5,5 @@ venv
 *.fits
 *.json
 *.csv
+euclidFields/*.fits.gz
+!euclidFields/euclid_dr1_footprint.json

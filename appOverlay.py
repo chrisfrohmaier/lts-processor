@@ -16,6 +16,7 @@ import shapely.geometry
 from matplotlib.patches import Ellipse
 from shapely.geometry import Polygon 
 from pymongo import MongoClient
+from euclid_overlay import add_euclid_to_fig, get_euclid_if_enabled
 
 st.set_page_config(layout="wide")
 st.title("LTS Polygons + LSST Survey Strategies = LTS Plans")
@@ -346,6 +347,10 @@ def render_lts_processor_page():
 # -------------------------------------------------------------
 page = st.sidebar.radio("Navigation", ["Draw Polygons on 4MOST", "Overlay on LSST", "Process LTS"])
 
+# Euclid DR1 footprint toggle (visualisation only, shared by both sky map pages)
+if page != "Process LTS":
+    st.sidebar.toggle("Show Euclid DR1", value=False, key="euclid_toggle")
+
 if page == "Draw Polygons on 4MOST":
     import handdraw_Polygons
     handdraw_Polygons.render_draw_polygons_page()
@@ -410,6 +415,9 @@ if mongo_uri:
 # NSIDE determines the resolution of the HEALPix map
 nside_options = [16, 32, 64, 128, 256, 512]
 NSIDE = st.select_slider("Select Map Resolution (NSIDE)", options=nside_options, value=32, key="nside_widget")
+
+# Euclid DR1 footprint (visualisation only, not an LTS input)
+euclid_data = get_euclid_if_enabled()
 
 @st.cache_data
 def load_csv(csv_path):
@@ -602,7 +610,11 @@ if df is not None and not df.empty:
                     survey_name = dataLatest.get('survey', survey_key)
                     # Pass the target year (1-indexed based on year_index)
                     add_polygons_to_fig(fig, dataLatest, survey_name, target_year=year_index+1)
-            
+
+            # Euclid DR1 footprint, drawn last so it sits on top
+            if euclid_data:
+                add_euclid_to_fig(fig, euclid_data)
+
             fig.update_layout(
                 title=f"Projected NESTED HEALPix Map Year {year_index+1} (NSIDE={ns})",
                 xaxis_title="Longitude",

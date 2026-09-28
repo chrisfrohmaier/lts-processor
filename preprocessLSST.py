@@ -13,7 +13,7 @@ def preprocess_db(db_path):
         engine = create_engine(f'sqlite:///{db_path}')
         
         # Read the database just like in appHealpy
-        query = "SELECT fieldRa, fieldDec, observationStartMJD, flush_by_MJD, visitExposureTime, band FROM observations where scheduler_note like 'pair%'"
+        query = "SELECT fieldRa, fieldDec, observationStartMJD, flush_by_MJD, visitExposureTime, band FROM observations where target_name='lowdust'"
         df = pd.read_sql(query, engine)
             
         # Determine output CSV filename
@@ -28,7 +28,7 @@ def preprocess_db(db_path):
         print(f"Error processing database: {e}")
 
 if __name__ == "__main__":
-    db_file = './baseline_v5.1.1_10yrs.db'
+    db_file = '/Users/chris/Documents/DESC/compare_DESI_strat/desi_3040_v5.3.0_10yrs.db'
     if len(sys.argv) > 1:
         db_file = sys.argv[1]
     
