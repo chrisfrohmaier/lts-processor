@@ -5,3 +5,4 @@ __pycache__/
 *.png
 *.db
 .DS_Store
+euclidFields/*.fits.gz
