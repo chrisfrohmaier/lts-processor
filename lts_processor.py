@@ -137,28 +137,45 @@ def get_latest_submissions_by_survey(mongo_uri, db_name="lts", coll_name="year1a
         except Exception:
             pass
 
+def _outline_pixels(nside, ra_vertices, dec_vertices):
+    """Pixels touched by the closed outline through the given (planar RA/Dec) vertices."""
+    step = np.degrees(hp.nside2resol(nside)) / 4.0
+    ra_v = np.append(ra_vertices, ra_vertices[0])
+    dec_v = np.append(dec_vertices, dec_vertices[0])
+    ra_pts, dec_pts = [], []
+    for k in range(len(ra_v) - 1):
+        n = max(2, int(np.ceil(np.hypot(ra_v[k + 1] - ra_v[k], dec_v[k + 1] - dec_v[k]) / step)) + 1)
+        ra_pts.append(np.linspace(ra_v[k], ra_v[k + 1], n))
+        dec_pts.append(np.linspace(dec_v[k], dec_v[k + 1], n))
+    ra_pts = np.mod(np.concatenate(ra_pts), 360.0)
+    dec_pts = np.clip(np.concatenate(dec_pts), -90.0, 90.0)
+    return np.unique(hp.ang2pix(nside, ra_pts, dec_pts, nest=True, lonlat=True))
+
 def get_pixels_for_shape(nside, shape, ra_all, dec_all):
-    """Returns pixel indices for a given shape dictionary using geometric bounds."""
+    """Returns pixel indices for a given shape, including every pixel the shape touches."""
     pixels = []
-    
+
     if shape['type'] == 'stripe':
         ra_1 = shape.get('RA_lower', 0)
         ra_2 = shape.get('RA_upper', 0)
         dec_1 = shape.get('Dec_lower', 0)
         dec_2 = shape.get('Dec_upper', 0)
-        
+
         ra_min, ra_max = min(ra_1, ra_2), max(ra_1, ra_2)
         dec_min, dec_max = min(dec_1, dec_2), max(dec_1, dec_2)
-        
+
         # Simple bounding box check on RA and Dec
         # If the stripe appears to logically cross the RA=0 boundary
-        if ra_1 > ra_2 and (ra_1 - ra_2) > 180: 
+        if ra_1 > ra_2 and (ra_1 - ra_2) > 180:
             mask_ra = (ra_all >= ra_1) | (ra_all <= ra_2)
+            ra_lo, ra_hi = ra_1, ra_2 + 360.0
         else:
             mask_ra = (ra_all >= ra_min) & (ra_all <= ra_max)
-            
+            ra_lo, ra_hi = ra_min, ra_max
+
         mask = mask_ra & (dec_all >= dec_min) & (dec_all <= dec_max)
-        pixels = np.where(mask)[0]
+        edge = _outline_pixels(nside, [ra_lo, ra_hi, ra_hi, ra_lo], [dec_min, dec_min, dec_max, dec_max])
+        pixels = np.union1d(np.where(mask)[0], edge)
 
     elif shape['type'] in ('point', 'circle'):
         ra_center = shape.get('RA_center', 0)
@@ -169,7 +186,7 @@ def get_pixels_for_shape(nside, shape, ra_all, dec_all):
         theta = np.deg2rad(90.0 - dec_center)
         phi = np.deg2rad(ra_center)
         vec = hp.ang2vec(theta, phi)
-        pixels = hp.query_disc(nside, vec, np.deg2rad(radius_deg), nest=True)
+        pixels = hp.query_disc(nside, vec, np.deg2rad(radius_deg), inclusive=True, nest=True)
 
     elif shape['type'] in ('polygon', 'box'):
         ra_arr = shape.get('RA', [])
@@ -182,7 +199,7 @@ def get_pixels_for_shape(nside, shape, ra_all, dec_all):
             # exactly like a web browser UI or shapely does.
             path = Path(pts)
             mask = path.contains_points(np.column_stack((ra_all, dec_all)))
-            pixels = np.where(mask)[0]
+            pixels = np.union1d(np.where(mask)[0], _outline_pixels(nside, ra_arr, dec_arr))
             
     return pixels
 

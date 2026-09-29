@@ -9,7 +9,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from astropy.time import Time
-from datetime import datetime, time
+from datetime import date, datetime, time
 
 st.title("HEALPix Survey Strategies")
 
@@ -78,13 +78,8 @@ vec_rot = r(vec)
 new_pix = hp.vec2pix(NSIDE, *vec_rot, nest=True)
 
 if df is not None and not df.empty:
-    min_mjd = float(df['observationStartMJD'].min())
-    
-    # Convert the lowest MJD to a python date to use as the default in the calendar
-    try:
-        min_date = Time(min_mjd, format='mjd').to_datetime().date()
-    except Exception:
-        min_date = datetime.today().date()
+    # Default LTS start date: 1st October 2026
+    min_date = date(2026, 10, 1)
         
     # Calendar date selector
     selected_date = st.date_input("Start Date", value=min_date)

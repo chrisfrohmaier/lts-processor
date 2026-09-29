@@ -116,20 +116,6 @@ def plotPolygons(data, survey_id, allColours=True):
         if i['type']=='stripe':
             RA_lower = i['RA_lower']; RA_upper = i['RA_upper']
             Dec_lower = i['Dec_lower']; Dec_upper = i['Dec_upper']
-            # compute RA span, handle wrap-around across 360->0
-            if RA_upper >= RA_lower:
-                ra_span = RA_upper - RA_lower
-            else:
-                ra_span = (RA_upper + 360.0) - RA_lower
-            dec_span = abs(Dec_upper - Dec_lower)
-            # enforce minimum span of 2.5 degrees for both axes
-            min_span = 2.5
-            if dec_span < min_span:
-                st.warning(
-                    f"Stripe '{i.get('name','')}' for survey {survey_id} is too small: "
-                    f"Dec span={dec_span:.2f}. Minimum is {min_span}.\n This will not be plotted and is not a valid LTS input."
-                )
-                continue
             # build rectangle corners and plot on chosen figure
             corners = rect_corners(RA_lower, RA_upper, Dec_lower, Dec_upper, closed=True)
 

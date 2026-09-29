@@ -10,7 +10,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from astropy.time import Time
-from datetime import datetime, time
+from datetime import date, datetime, time
 from plotly.express.colors import sample_colorscale
 import shapely.geometry
 from matplotlib.patches import Ellipse
@@ -96,11 +96,7 @@ def add_polygons_to_fig(fig, data, survey_id, target_year):
             RA_upper = i.get('RA_upper', 0)
             Dec_lower = i.get('Dec_lower', 0)
             Dec_upper = i.get('Dec_upper', 0)
-            
-            dec_span = abs(Dec_upper - Dec_lower)
-            if dec_span < 2.5:
-                continue # Skip small stripes
-                
+
             corners = rect_corners(RA_lower, RA_upper, Dec_lower, Dec_upper, closed=True)
             fig.add_trace(go.Scatter(x=corners[:, 0], y=corners[:, 1], showlegend=False, mode="lines",
                                      line=dict(color=outline_color, width=outline_width), hoverinfo='skip'))
@@ -466,13 +462,8 @@ vec_rot = r(vec)
 new_pix = hp.vec2pix(NSIDE, *vec_rot, nest=True)
 
 if df is not None and not df.empty:
-    min_mjd = float(df['observationStartMJD'].min())
-    
-    # Convert the lowest MJD to a python date to use as the default in the calendar
-    try:
-        min_date = Time(min_mjd, format='mjd').to_datetime().date()
-    except Exception:
-        min_date = datetime.today().date()
+    # Default LTS start date: 1st October 2026
+    min_date = date(2026, 10, 1)
         
     selected_date = st.date_input("Start Date", value=min_date, key="date_widget")
     dt_midnight = datetime.combine(selected_date, time.min)
